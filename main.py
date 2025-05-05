@@ -1,18 +1,10 @@
 
+from flask import Flask, render_template_string
 import yfinance as yf
 import pandas as pd
-from flask import Flask, render_template_string
-import requests
+import numpy as np
 
 app = Flask(__name__)
-
-TICKERS = {
-    "BTC-USD": "Bitcoin",
-    "ETH-USD": "Ethereum",
-    "SOL-USD": "Solana"
-}
-
-ALERTAS = {t: "—" for t in TICKERS}
 
 TEMPLATE = '''
 <!doctype html>
@@ -20,15 +12,14 @@ TEMPLATE = '''
 <head>
     <title>FeOliCryptoBot - Painel</title>
     <style>
-        body { font-family: sans-serif; text-align: center; margin: 40px; }
-        table { width: 90%; margin: auto; border-collapse: collapse; }
-        th, td { border: 2px solid black; padding: 12px; font-size: 18px; }
-        th { background-color: #f2f2f2; font-size: 22px; }
-        .alta { color: green; font-weight: bold; }
-        .baixa { color: red; font-weight: bold; }
-        .compra { color: green; font-weight: bold; }
-        .venda { color: red; font-weight: bold; }
-        .legenda { margin-top: 30px; background: #f8f8f8; padding: 20px; width: 80%; margin-left: auto; margin-right: auto; border: 1px solid #ccc; border-radius: 5px; }
+        body { font-family: Arial, sans-serif; text-align: center; margin: 40px; }
+        table { border-collapse: collapse; width: 90%; margin: auto; }
+        th, td { border: 1px solid #999; padding: 8px; }
+        th { background: #eee; font-size: 20px; }
+        .green { color: green; font-weight: bold; }
+        .red { color: red; font-weight: bold; }
+        .emoji { font-size: 18px; }
+        .legend { margin-top: 30px; background: #f5f5f5; padding: 20px; border-radius: 8px; width: 90%; margin: 30px auto; }
     </style>
 </head>
 <body>
@@ -43,105 +34,103 @@ TEMPLATE = '''
             <th>Tendência</th>
             <th>Último Alerta</th>
         </tr>
-        {% for t in nomes %}
+        {% for nome in nomes %}
         <tr>
-            <td>{{ nomes[t] }}</td>
-            <td>${{ "%.2f"|format(precos[t]) }}</td>
-            <td>{{ "%.2f"|format(ind[t]["RSI"]) }}</td>
-            <td>{{ "%.4f"|format(ind[t]["MACD"]) }}</td>
-            <td>{{ "%.4f"|format(ind[t]["Signal"]) }}</td>
-            <td class="{{ 'alta' if ind[t]['Tendência'] == 'Alta' else 'baixa' }}">
-                {{ '▲ Alta' if ind[t]["Tendência"] == 'Alta' else '▼ Baixa' }}
+            <td>{{ nome }}</td>
+            <td>${{ '%.2f' % precos[nome] }}</td>
+            <td>{{ '%.2f' % ind[nome]['RSI'] }}</td>
+            <td>{{ '%.4f' % ind[nome]['MACD'] }}</td>
+            <td>{{ '%.4f' % ind[nome]['Signal'] }}</td>
+            <td class="{{ 'green' if ind[nome]['Trend'] == 'Alta' else 'red' }}">
+                <span class="emoji">{{ '▲' if ind[nome]['Trend'] == 'Alta' else '▼' }}</span>
+                {{ ind[nome]['Trend'] }}
             </td>
-            <td>{{ alertas[t] }}</td>
+            <td>{{ alertas.get(nome, '—') }}</td>
         </tr>
         {% endfor %}
     </table>
 
-    <div class="legenda">
-        <p style="font-size: 20px;">
-            📘 <strong>Legenda dos Alertas:</strong><br><br>
-            🟢 <strong>Alerta de COMPRA</strong>: RSI abaixo de 30 <u>e</u> MACD cruzando acima da Signal<br>
-            🔴 <strong>Alerta de VENDA</strong>: RSI acima de 70 <u>e</u> MACD cruzando abaixo da Signal
-        </p>
+    <div class="legend">
+        <h3>📘 Legenda dos Alertas:</h3>
+        <p>🟢 <b>Alerta de COMPRA</b>: RSI abaixo de 30 <u>e</u> MACD cruzando acima da Signal</p>
+        <p>🔴 <b>Alerta de VENDA</b>: RSI acima de 70 <u>e</u> MACD cruzando abaixo da Signal</p>
     </div>
 
-    <p style="margin-top: 20px; color: gray;">Atualizado a cada minuto (modo debug)</p>
+    <p style="color: gray;">Atualizado a cada minuto (modo debug)</p>
 </body>
 </html>
 '''
 
-def calcular_indicadores(ticker):
-    try:
-        df = yf.download(ticker, period="3mo", interval="1h")
-        close = df["Close"]
-        if close.isnull().all():
-            raise ValueError("Dados insuficientes")
+TICKERS = {
+    'Bitcoin': 'BTC-USD',
+    'Ethereum': 'ETH-USD',
+    'Solana': 'SOL-USD'
+}
 
-        rsi = 100 - (100 / (1 + close.pct_change().rolling(14).mean() / close.pct_change().rolling(14).std()))
-        ema12 = close.ewm(span=12, adjust=False).mean()
-        ema26 = close.ewm(span=26, adjust=False).mean()
-        macd = ema12 - ema26
-        signal = macd.ewm(span=9, adjust=False).mean()
+def calcular_indicadores(df):
+    close = df['Close']
 
-        atual = {
-            "RSI": float(rsi.iloc[-1]),
-            "MACD": float(macd.iloc[-1]),
-            "Signal": float(signal.iloc[-1]),
-        }
-        atual["Tendência"] = "Alta" if atual["MACD"] > atual["Signal"] else "Baixa"
-        return atual
-    except Exception as e:
-        print(f"Erro ao calcular indicadores para {ticker}: {e}")
-        return {
-            "RSI": 0.0,
-            "MACD": 0.0,
-            "Signal": 0.0,
-            "Tendência": "Erro"
-        }
+    rsi = calcular_rsi(close)
+    macd_line, signal_line = calcular_macd(close)
 
-def enviar_alerta(mensagem):
-    token = "SEU_BOT_TOKEN"
-    chat_id = "SEU_CHAT_ID"
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = {"chat_id": chat_id, "text": mensagem}
-    try:
-        requests.post(url, data=data)
-    except Exception as e:
-        print(f"Erro ao enviar mensagem: {e}")
+    if macd_line[-1] > signal_line[-1]:
+        trend = 'Alta'
+    else:
+        trend = 'Baixa'
 
-@app.route("/")
+    return {
+        'RSI': rsi.iloc[-1],
+        'MACD': macd_line.iloc[-1],
+        'Signal': signal_line.iloc[-1],
+        'Trend': trend
+    }
+
+def calcular_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+def calcular_macd(series):
+    ema12 = series.ewm(span=12, adjust=False).mean()
+    ema26 = series.ewm(span=26, adjust=False).mean()
+    macd = ema12 - ema26
+    signal = macd.ewm(span=9, adjust=False).mean()
+    return macd, signal
+
+@app.route('/')
 def home():
     precos = {}
     indicadores = {}
-    for t in TICKERS:
-        try:
-            df = yf.download(t, period="1d", interval="1h")
-            precos[t] = float(df["Close"].iloc[-1])
-            indicadores[t] = calcular_indicadores(t)
+    alertas = {}
 
-            rsi = indicadores[t]["RSI"]
-            macd = indicadores[t]["MACD"]
-            signal = indicadores[t]["Signal"]
-            tendencia = indicadores[t]["Tendência"]
+    for nome, ticker in TICKERS.items():
+        try:
+            df = yf.download(ticker, period='3mo', interval='1d', progress=False)
+            if df.empty or len(df) < 35:
+                raise ValueError("Dados insuficientes para análise")
+
+            precos[nome] = float(df['Close'].iloc[-1])
+            indicadores[nome] = calcular_indicadores(df)
+
+            rsi = indicadores[nome]['RSI']
+            macd = indicadores[nome]['MACD']
+            signal = indicadores[nome]['Signal']
 
             if rsi < 30 and macd > signal:
-                alerta = f"🟢 Alerta de COMPRA para {TICKERS[t]}!"
-                if ALERTAS[t] != alerta:
-                    ALERTAS[t] = alerta
-                    enviar_alerta(alerta)
+                alertas[nome] = '🟢 COMPRA'
             elif rsi > 70 and macd < signal:
-                alerta = f"🔴 Alerta de VENDA para {TICKERS[t]}!"
-                if ALERTAS[t] != alerta:
-                    ALERTAS[t] = alerta
-                    enviar_alerta(alerta)
-            else:
-                ALERTAS[t] = "—"
+                alertas[nome] = '🔴 VENDA'
+
         except Exception as e:
-            print(f"⚠️ Erro analisando {t}: {e}")
-            ALERTAS[t] = "Erro"
+            precos[nome] = 0.0
+            indicadores[nome] = {'RSI': 0.0, 'MACD': 0.0, 'Signal': 0.0, 'Trend': 'Erro'}
+            alertas[nome] = f"⚠️ Erro: {str(e)}"
 
-    return render_template_string(TEMPLATE, precos=precos, ind=indicadores, nomes=TICKERS, alertas=ALERTAS)
+    return render_template_string(TEMPLATE, precos=precos, ind=indicadores, nomes=TICKERS, alertas=alertas)
 
-if __name__ == "__main__":
-    app.run(debug=True, port=8080, host="0.0.0.0")
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
