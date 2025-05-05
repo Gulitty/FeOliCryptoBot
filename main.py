@@ -5,6 +5,8 @@ import time
 import requests
 from keep_alive import keep_alive
 
+send_telegram("✅ Bot FeOliCryptoBot rodando com sucesso! Teste de alerta.")
+
 TOKEN = "7733542207:AAEgogN0zgimnJEo1Q3vNaQX6Ayc7tpHF_s"
 CHAT_ID = "6290071192"
 
