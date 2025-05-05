@@ -1,135 +1,109 @@
 
-from flask import Flask, render_template_string
-import yfinance as yf
+import requests
 import pandas as pd
-import numpy as np
+from flask import Flask, render_template_string
 
 app = Flask(__name__)
 
-TEMPLATE = '''
-<!doctype html>
-<html>
-<head>
-    <title>FeOliCryptoBot - Painel</title>
-    <style>
-        body { font-family: Arial, sans-serif; text-align: center; margin: 40px; }
-        table { border-collapse: collapse; width: 90%; margin: auto; }
-        th, td { border: 1px solid #999; padding: 8px; }
-        th { background: #eee; font-size: 20px; }
-        .green { color: green; font-weight: bold; }
-        .red { color: red; font-weight: bold; }
-        .emoji { font-size: 18px; }
-        .legend { margin-top: 30px; background: #f5f5f5; padding: 20px; border-radius: 8px; width: 90%; margin: 30px auto; }
-    </style>
-</head>
-<body>
-    <h1>FeOliCryptoBot - Painel</h1>
-    <table>
-        <tr>
-            <th>Cripto</th>
-            <th>Preço Atual</th>
-            <th>RSI</th>
-            <th>MACD</th>
-            <th>Signal</th>
-            <th>Tendência</th>
-            <th>Último Alerta</th>
-        </tr>
-        {% for nome in nomes %}
-        <tr>
-            <td>{{ nome }}</td>
-            <td>${{ '%.2f' % precos[nome] }}</td>
-            <td>{{ '%.2f' % ind[nome]['RSI'] }}</td>
-            <td>{{ '%.4f' % ind[nome]['MACD'] }}</td>
-            <td>{{ '%.4f' % ind[nome]['Signal'] }}</td>
-            <td class="{{ 'green' if ind[nome]['Trend'] == 'Alta' else 'red' }}">
-                <span class="emoji">{{ '▲' if ind[nome]['Trend'] == 'Alta' else '▼' }}</span>
-                {{ ind[nome]['Trend'] }}
-            </td>
-            <td>{{ alertas.get(nome, '—') }}</td>
-        </tr>
-        {% endfor %}
-    </table>
-
-    <div class="legend">
-        <h3>📘 Legenda dos Alertas:</h3>
-        <p>🟢 <b>Alerta de COMPRA</b>: RSI abaixo de 30 <u>e</u> MACD cruzando acima da Signal</p>
-        <p>🔴 <b>Alerta de VENDA</b>: RSI acima de 70 <u>e</u> MACD cruzando abaixo da Signal</p>
-    </div>
-
-    <p style="color: gray;">Atualizado a cada minuto (modo debug)</p>
-</body>
-</html>
-'''
-
 TICKERS = {
-    'Bitcoin': 'BTC-USD',
-    'Ethereum': 'ETH-USD',
-    'Solana': 'SOL-USD'
+    "BTCUSDT": "Bitcoin",
+    "ETHUSDT": "Ethereum",
+    "SOLUSDT": "Solana"
 }
 
-def calcular_indicadores(df):
-    close = df['Close']
+def get_binance_klines(symbol, interval='1h', limit=100):
+    url = f"https://api.binance.com/api/v3/klines"
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    response = requests.get(url, params=params)
+    data = response.json()
+    df = pd.DataFrame(data, columns=[
+        'timestamp', 'open', 'high', 'low', 'close', 'volume',
+        'close_time', 'quote_asset_volume', 'number_of_trades',
+        'taker_buy_base_volume', 'taker_buy_quote_volume', 'ignore'
+    ])
+    df['close'] = pd.to_numeric(df['close'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    return df
 
-    rsi = calcular_rsi(close)
-    macd_line, signal_line = calcular_macd(close)
-
-    if macd_line[-1] > signal_line[-1]:
-        trend = 'Alta'
-    else:
-        trend = 'Baixa'
-
-    return {
-        'RSI': rsi.iloc[-1],
-        'MACD': macd_line.iloc[-1],
-        'Signal': signal_line.iloc[-1],
-        'Trend': trend
-    }
-
-def calcular_rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.rolling(window=period).mean()
-    avg_loss = loss.rolling(window=period).mean()
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-def calcular_macd(series):
-    ema12 = series.ewm(span=12, adjust=False).mean()
-    ema26 = series.ewm(span=26, adjust=False).mean()
-    macd = ema12 - ema26
-    signal = macd.ewm(span=9, adjust=False).mean()
-    return macd, signal
+def calculate_indicators(df):
+    df['EMA12'] = df['close'].ewm(span=12, adjust=False).mean()
+    df['EMA26'] = df['close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = df['EMA12'] - df['EMA26']
+    df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    return df
 
 @app.route('/')
 def home():
     precos = {}
     indicadores = {}
     alertas = {}
-
-    for nome, ticker in TICKERS.items():
+    for symbol, nome in TICKERS.items():
         try:
-            df = yf.download(ticker, period='3mo', interval='1d', progress=False)
-            if df.empty or len(df) < 35:
-                raise ValueError("Dados insuficientes para análise")
+            df = get_binance_klines(symbol)
+            df = calculate_indicators(df)
+            atual = df.iloc[-1]
+            preco = float(atual['close'])
+            rsi = round(float(atual['RSI']), 2)
+            macd = round(float(atual['MACD']), 4)
+            signal = round(float(atual['Signal']), 4)
 
-            precos[nome] = float(df['Close'].iloc[-1])
-            indicadores[nome] = calcular_indicadores(df)
-
-            rsi = indicadores[nome]['RSI']
-            macd = indicadores[nome]['MACD']
-            signal = indicadores[nome]['Signal']
-
+            tendencia = "Alta" if macd > signal else "Baixa"
+            alerta = ""
             if rsi < 30 and macd > signal:
-                alertas[nome] = '🟢 COMPRA'
+                alerta = "🔔 Alerta de COMPRA"
             elif rsi > 70 and macd < signal:
-                alertas[nome] = '🔴 VENDA'
+                alerta = "🔔 Alerta de VENDA"
 
+            precos[symbol] = preco
+            indicadores[symbol] = {
+                "RSI": rsi,
+                "MACD": macd,
+                "Signal": signal,
+                "Tendencia": tendencia
+            }
+            alertas[symbol] = alerta or "—"
         except Exception as e:
-            precos[nome] = 0.0
-            indicadores[nome] = {'RSI': 0.0, 'MACD': 0.0, 'Signal': 0.0, 'Trend': 'Erro'}
-            alertas[nome] = f"⚠️ Erro: {str(e)}"
+            precos[symbol] = 0
+            indicadores[symbol] = {"RSI": 0, "MACD": 0, "Signal": 0, "Tendencia": "Erro"}
+            alertas[symbol] = f"⚠️ Erro: {e}"
 
+    TEMPLATE = '''
+    <html>
+    <head><meta charset="UTF-8"><title>FeOliCryptoBot</title></head>
+    <body style="font-family:sans-serif;">
+    <h1 style="text-align:center;">FeOliCryptoBot - Painel</h1>
+    <table border="1" cellpadding="8" cellspacing="0" style="margin:auto;text-align:center;font-size:18px;">
+        <tr style="background:#eee;font-weight:bold;">
+            <td>Cripto</td><td>Preço Atual</td><td>RSI</td><td>MACD</td><td>Signal</td><td>Tendência</td><td>Último Alerta</td>
+        </tr>
+        {% for t, nome in nomes.items() %}
+        <tr>
+            <td>{{ nome }}</td>
+            <td>${{ '%.2f' % precos[t] }}</td>
+            <td>{{ '%.2f' % ind[t]['RSI'] }}</td>
+            <td>{{ '%.4f' % ind[t]['MACD'] }}</td>
+            <td>{{ '%.4f' % ind[t]['Signal'] }}</td>
+            <td style="color:{{ 'green' if ind[t]['Tendencia']=='Alta' else 'red' }}">
+                {{ '▲ Alta' if ind[t]['Tendencia']=='Alta' else '▼ Baixa' }}
+            </td>
+            <td>{{ alertas[t] }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    <div style="margin:40px auto;width:80%;padding:20px;background:#f8f8f8;border-radius:10px;">
+        <p><strong>📘 Legenda dos Alertas:</strong></p>
+        <p>🟢 <strong>Alerta de COMPRA</strong>: RSI abaixo de 30 <u>e</u> MACD cruzando acima da Signal</p>
+        <p>🔴 <strong>Alerta de VENDA</strong>: RSI acima de 70 <u>e</u> MACD cruzando abaixo da Signal</p>
+    </div>
+    <p style="text-align:center;color:gray;">Atualizado a cada minuto (modo debug)</p>
+    </body>
+    </html>
+    '''
     return render_template_string(TEMPLATE, precos=precos, ind=indicadores, nomes=TICKERS, alertas=alertas)
 
 if __name__ == '__main__':
