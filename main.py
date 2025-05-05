@@ -39,6 +39,9 @@ def analisar():
             df.dropna(inplace=True)
             close = df["Close"]
 
+            if len(close) < 30:
+                continue
+
             rsi = 100 - (100 / (1 + (close.pct_change().rolling(14).mean() /
                                      close.pct_change().rolling(14).std())))
             exp1 = close.ewm(span=12, adjust=False).mean()
@@ -52,10 +55,9 @@ def analisar():
                 "signal": signal.iloc[-1]
             }
 
-            precos[t] = float(close.iloc[-1])
+            precos[t] = float(close.iloc[-1].item())
             indicadores[t] = atual
 
-            # ALERTAS
             alerta = None
             if atual["rsi"] < 30 and atual["macd"] > atual["signal"]:
                 alerta = f"🟢 Alerta de COMPRA em {nome}"
@@ -78,7 +80,42 @@ def atualizar():
 def home():
     return render_template_string(TEMPLATE, precos=precos, ind=indicadores, nomes=TICKERS, alertas=ALERTAS)
 
-TEMPLATE = """" + legenda_template + """""
+TEMPLATE = """
+<html><head><title>Status CriptoBot</title></head>
+<body style="font-family:sans-serif;padding:20px;">
+<h1>FeOliCryptoBot - Painel</h1>
+<table border="1" cellpadding="10">
+    <tr><th>Cripto</th><th>Preço Atual</th><th>RSI</th><th>MACD</th><th>Signal</th><th>Tendência</th><th>Último Alerta</th></tr>
+    {% for k,v in precos.items() %}
+    <tr>
+        <td>{{ nomes[k] }}</td>
+        <td>${{ '%.2f' % v }}</td>
+        <td>{{ '%.2f' % ind[k]['rsi'] }}</td>
+        <td>{{ '%.4f' % ind[k]['macd'] }}</td>
+        <td>{{ '%.4f' % ind[k]['signal'] }}</td>
+        <td>
+            {% if ind[k]['macd'] > ind[k]['signal'] %}
+                <span style="color:green;">&uarr; Alta</span>
+            {% elif ind[k]['macd'] < ind[k]['signal'] %}
+                <span style="color:red;">&darr; Baixa</span>
+            {% else %}
+                &harr; Neutro
+            {% endif %}
+        </td>
+        <td>{{ alertas.get(k, '—') }}</td>
+    </tr>
+    {% endfor %}
+</table>
+
+<div style="margin-top:20px; font-size:14px; padding:10px; border:1px solid #ccc; background:#f9f9f9;">
+    <strong>📘 Legenda dos Alertas:</strong><br>
+    🟢 <strong>Alerta de COMPRA</strong>: RSI abaixo de 30 <u>e</u> MACD cruzando acima da Signal<br>
+    🔴 <strong>Alerta de VENDA</strong>: RSI acima de 70 <u>e</u> MACD cruzando abaixo da Signal
+</div>
+
+<p style="margin-top:10px;font-size:0.9em;color:gray;">Atualizado a cada minuto (modo debug)</p>
+</body></html>
+"""
 
 if __name__ == "__main__":
     threading.Thread(target=atualizar, daemon=True).start()
