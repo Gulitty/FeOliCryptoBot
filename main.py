@@ -3,8 +3,8 @@ import yfinance as yf
 import pandas as pd
 import time
 import requests
-from keep_alive import keep_alive
-import os
+import threading
+from flask import Flask, render_template_string
 
 TOKEN = "7733542207:AAEgogN0zgimnJEo1Q3vNaQX6Ayc7tpHF_s"
 CHAT_ID = "6290071192"
@@ -15,8 +15,8 @@ cryptos = {
     'SOL-USD': 'Solana'
 }
 
-# Armazena os últimos alertas para não repetir
 ultimo_alerta = {}
+precos_atuais = {}
 
 def get_rsi(data, period=14):
     delta = data['Close'].diff()
@@ -44,7 +44,7 @@ def send_telegram(message):
         print("Erro ao enviar mensagem:", e)
 
 def analisar(ticker):
-    df = yf.download(ticker, interval="1h", period="7d")
+    df = yf.download(ticker, interval="1h", period="7d", progress=False)
     if df.empty:
         return
 
@@ -55,12 +55,13 @@ def analisar(ticker):
     anterior = df.iloc[-2]
 
     nome = cryptos[ticker]
-    preco = atual['Close']
-        rsi = atual['RSI'].item()
+    preco = atual['Close'].item()
+    rsi = atual['RSI'].item()
     macd = atual['MACD'].item()
     signal = atual['Signal'].item()
 
-    msg = None
+    precos_atuais[ticker] = preco
+
     chave = f"{ticker}_compra" if rsi < 30 and anterior['MACD'] < anterior['Signal'] and macd > signal else f"{ticker}_venda" if rsi > 70 and anterior['MACD'] > anterior['Signal'] and macd < signal else None
 
     if chave:
@@ -70,14 +71,42 @@ def analisar(ticker):
             ultimo_alerta[ticker] = chave
             send_telegram(msg)
 
-# Iniciar servidor Flask (caso queira usar UptimeRobot)
-keep_alive()
+# Flask App
+app = Flask(__name__)
 
-# Loop principal
-while True:
-    for ativo in cryptos.keys():
-        try:
-            analisar(ativo)
-        except Exception as erro:
-            send_telegram(f"⚠️ Erro analisando {ativo}: {erro}")
-    time.sleep(3600)
+@app.route("/")
+def painel():
+    html = '''
+    <html><head><title>Status CriptoBot</title></head>
+    <body style="font-family:sans-serif;padding:20px;">
+    <h1>FeOliCryptoBot - Painel</h1>
+    <table border="1" cellpadding="10">
+        <tr><th>Cripto</th><th>Preço Atual</th><th>Último Alerta</th></tr>
+        {% for k,v in precos.items() %}
+        <tr>
+            <td>{{ nomes[k] }}</td>
+            <td>${{ '%.2f' % v }}</td>
+            <td>{{ alertas.get(k, '—') }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    <p style="margin-top:20px;font-size:0.9em;color:gray;">Atualizado a cada hora</p>
+    </body></html>
+    '''
+    return render_template_string(html, precos=precos_atuais, alertas=ultimo_alerta, nomes=cryptos)
+
+def loop_principal():
+    while True:
+        for ativo in cryptos.keys():
+            try:
+                analisar(ativo)
+            except Exception as erro:
+                send_telegram(f"⚠️ Erro analisando {ativo}: {erro}")
+        time.sleep(3600)
+
+# Iniciar análise em thread separada
+threading.Thread(target=loop_principal, daemon=True).start()
+
+# Iniciar servidor Flask
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)
