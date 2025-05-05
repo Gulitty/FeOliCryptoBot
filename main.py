@@ -83,13 +83,23 @@ def painel():
     <body style="font-family:sans-serif;padding:20px;">
     <h1>FeOliCryptoBot - Painel</h1>
     <table border="1" cellpadding="10">
-        <tr><th>Cripto</th><th>Preço Atual</th><th>RSI</th><th>MACD</th><th>Último Alerta</th></tr>
+        <tr><th>Cripto</th><th>Preço Atual</th><th>RSI</th><th>MACD</th><th>Signal</th><th>Tendência</th><th>Último Alerta</th></tr>
         {% for k,v in precos.items() %}
         <tr>
             <td>{{ nomes[k] }}</td>
             <td>${{ '%.2f' % v }}</td>
             <td>{{ '%.2f' % ind[k]['rsi'] }}</td>
             <td>{{ '%.4f' % ind[k]['macd'] }}</td>
+            <td>{{ '%.4f' % ind[k]['signal'] }}</td>
+            <td>
+                {% if ind[k]['macd'] > ind[k]['signal'] %}
+                    <span style="color:green;">▲ Alta</span>
+                {% elif ind[k]['macd'] < ind[k]['signal'] %}
+                    <span style="color:red;">▼ Baixa</span>
+                {% else %}
+                    ↔ Neutro
+                {% endif %}
+            </td>
             <td>{{ alertas.get(k, '—') }}</td>
         </tr>
         {% endfor %}
@@ -106,7 +116,7 @@ def loop_principal():
                 analisar(ativo)
             except Exception as erro:
                 send_telegram(f"⚠️ Erro analisando {ativo}: {erro}")
-        time.sleep(60)  # modo debug: 60 segundos
+        time.sleep(60)
 
 # Iniciar análise em thread separada
 threading.Thread(target=loop_principal, daemon=True).start()
