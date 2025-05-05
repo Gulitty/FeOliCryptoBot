@@ -1,108 +1,99 @@
-from flask import Flask, render_template_string
-import yfinance as yf
-import pandas as pd
 import requests
-import os
-import datetime
+from flask import Flask, render_template_string
+import pandas as pd
 
 app = Flask(__name__)
 
 TICKERS = {
-    "Bitcoin": "BTC-USD",
-    "Ethereum": "ETH-USD",
-    "Solana": "SOL-USD"
+    "BTCUSDT": "Bitcoin",
+    "ETHUSDT": "Ethereum",
+    "SOLUSDT": "Solana"
 }
 
-ALERTAS = {nome: "—" for nome in TICKERS}
-indicadores = {nome: {"RSI": 0, "MACD": 0, "SIGNAL": 0, "TENDENCIA": "—"} for nome in TICKERS}
-precos = {nome: 0 for nome in TICKERS}
+def get_binance_klines(symbol, interval="1h", limit=100):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    response = requests.get(url)
+    data = response.json()
+    df = pd.DataFrame(data, columns=[
+        "timestamp", "open", "high", "low", "close", "volume",
+        "close_time", "quote_asset_volume", "number_of_trades",
+        "taker_buy_base", "taker_buy_quote", "ignore"
+    ])
+    df["close"] = df["close"].astype(float)
+    return df
 
-def calcular_indicadores(data):
-    close = data['Close']
-    delta = close.diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.rolling(window=14).mean()
-    avg_loss = loss.rolling(window=14).mean()
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
+def calculate_indicators(df):
+    df["EMA12"] = df["close"].ewm(span=12, adjust=False).mean()
+    df["EMA26"] = df["close"].ewm(span=26, adjust=False).mean()
+    df["MACD"] = df["EMA12"] - df["EMA26"]
+    df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
 
-    exp1 = close.ewm(span=12, adjust=False).mean()
-    exp2 = close.ewm(span=26, adjust=False).mean()
-    macd = exp1 - exp2
-    signal = macd.ewm(span=9, adjust=False).mean()
-
-    return rsi, macd, signal
-
-def buscar_preco_binance(ticker_binance):
-    url = f"https://api.binance.com/api/v3/ticker/price?symbol={ticker_binance}"
-    try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            return float(response.json()['price'])
-    except:
-        return None
-    return None
-
-def atualizar():
-    global precos, indicadores, ALERTAS
-
-    for nome, ticker in TICKERS.items():
-        try:
-            data = yf.download(ticker, period="15d", interval="1h", progress=False)
-            if data.empty:
-                raise ValueError("Dados do Yahoo vazios")
-
-            rsi, macd, signal = calcular_indicadores(data)
-            atual = pd.DataFrame({
-                'RSI': [rsi.iloc[-1]],
-                'MACD': [macd.iloc[-1]],
-                'SIGNAL': [signal.iloc[-1]]
-            })
-
-            preco = float(data['Close'].iloc[-1])
-            precos[nome] = preco
-            indicadores[nome] = {
-                "RSI": round(atual['RSI'].iloc[0], 2),
-                "MACD": round(atual['MACD'].iloc[0], 4),
-                "SIGNAL": round(atual['SIGNAL'].iloc[0], 4),
-                "TENDENCIA": "🔻 Baixa" if atual['MACD'].iloc[0] < atual['SIGNAL'].iloc[0] else "🔺 Alta"
-            }
-
-            rsi_v = atual['RSI'].iloc[0]
-            macd_v = atual['MACD'].iloc[0]
-            sig_v = atual['SIGNAL'].iloc[0]
-
-            if rsi_v < 30 and macd_v > sig_v:
-                ALERTAS[nome] = "🟢 Alerta de COMPRA"
-            elif rsi_v > 70 and macd_v < sig_v:
-                ALERTAS[nome] = "🔴 Alerta de VENDA"
-            else:
-                ALERTAS[nome] = "—"
-
-        except Exception as e:
-            binance_symbol = ticker.replace("-USD", "USDT").replace("-", "")
-            preco_binance = buscar_preco_binance(binance_symbol)
-
-            precos[nome] = preco_binance if preco_binance else 0
-            indicadores[nome] = {"RSI": 0, "MACD": 0, "SIGNAL": 0, "TENDENCIA": "🔻 Erro"}
-            ALERTAS[nome] = f"⚠️ Erro: {str(e).splitlines()[0]}"
+    delta = df["close"].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df["RSI"] = 100 - (100 / (1 + rs))
+    return df
 
 @app.route("/")
 def home():
-    atualizar()
-    return render_template_string(TEMPLATE, precos=precos, ind=indicadores, nomes=TICKERS, alertas=ALERTAS)
+    dados = []
+    for symbol, name in TICKERS.items():
+        try:
+            df = get_binance_klines(symbol)
+            df = calculate_indicators(df)
+            last = df.iloc[-1]
 
-TEMPLATE = """<!DOCTYPE html>
+            price = round(df['close'].iloc[-1], 2)
+            rsi = round(last["RSI"], 2)
+            macd = round(last["MACD"], 4)
+            signal = round(last["Signal"], 4)
+
+            tendencia = "▲ Alta" if macd > signal else "▼ Baixa"
+
+            dados.append({
+                "nome": name,
+                "preco": f"${price}",
+                "rsi": rsi,
+                "macd": macd,
+                "signal": signal,
+                "tendencia": tendencia,
+                "alerta": "—"
+            })
+        except Exception as e:
+            dados.append({
+                "nome": name,
+                "preco": "$0.00",
+                "rsi": 0.00,
+                "macd": 0.0000,
+                "signal": 0.0000,
+                "tendencia": "▼ Erro",
+                "alerta": f"⚠️ Erro: {str(e)}"
+            })
+
+    return render_template_string(TEMPLATE, dados=dados)
+
+TEMPLATE = """
+<!DOCTYPE html>
 <html>
 <head>
-    <meta charset="utf-8">
     <title>FeOliCryptoBot - Painel</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 40px; }
+        h1 { text-align: center; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ccc; padding: 10px; text-align: center; }
+        th { background-color: #f2f2f2; font-size: 18px; }
+        .legenda { margin-top: 40px; padding: 20px; background-color: #f9f9f9; border-radius: 8px; }
+        .legenda h3 { margin-bottom: 10px; }
+        .verde { color: green; font-weight: bold; }
+        .vermelho { color: red; font-weight: bold; }
+    </style>
 </head>
-<body style="font-family: Arial; margin: 40px;">
-    <h1 style="text-align:center;">FeOliCryptoBot - Painel</h1>
-    <table border="1" cellspacing="0" cellpadding="8" style="margin:auto; border-collapse: collapse;">
-        <tr style="background-color:#eee;">
+<body>
+    <h1>FeOliCryptoBot - Painel</h1>
+    <table>
+        <tr>
             <th>Cripto</th>
             <th>Preço Atual</th>
             <th>RSI</th>
@@ -111,27 +102,27 @@ TEMPLATE = """<!DOCTYPE html>
             <th>Tendência</th>
             <th>Último Alerta</th>
         </tr>
-        {% for nome in nomes %}
+        {% for d in dados %}
         <tr>
-            <td>{{ nome }}</td>
-            <td>${{ '%.2f' % precos[nome] }}</td>
-            <td>{{ '%.2f' % ind[nome]["RSI"] }}</td>
-            <td>{{ '%.4f' % ind[nome]["MACD"] }}</td>
-            <td>{{ '%.4f' % ind[nome]["SIGNAL"] }}</td>
-            <td><strong>{{ ind[nome]["TENDENCIA"] }}</strong></td>
-            <td>{{ alertas[nome] }}</td>
+            <td>{{ d.nome }}</td>
+            <td>{{ d.preco }}</td>
+            <td>{{ d.rsi }}</td>
+            <td>{{ d.macd }}</td>
+            <td>{{ d.signal }}</td>
+            <td>{{ d.tendencia }}</td>
+            <td>{{ d.alerta }}</td>
         </tr>
         {% endfor %}
     </table>
-    <div style="margin:40px auto; width:80%; background:#f7f7f7; padding:20px; border-radius:8px;">
+    <div class="legenda">
         <h3>📘 Legenda dos Alertas:</h3>
-        <p>🟢 <strong>Alerta de COMPRA</strong>: RSI abaixo de 30 <u>e</u> MACD cruzando acima da Signal</p>
-        <p>🔴 <strong>Alerta de VENDA</strong>: RSI acima de 70 <u>e</u> MACD cruzando abaixo da Signal</p>
+        <p class="verde">🟢 Alerta de COMPRA</p>
+        <p class="vermelho">🔴 Alerta de VENDA</p>
     </div>
     <p style="text-align:center; color:gray;">Atualizado a cada minuto (modo debug)</p>
 </body>
-</html>"""
+</html>
+"""
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(debug=True)
