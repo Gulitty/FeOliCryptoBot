@@ -1,47 +1,108 @@
-
-import requests
-import pandas as pd
-import numpy as np
-import time
 from flask import Flask, render_template_string
-from datetime import datetime
-import pytz
+import yfinance as yf
+import pandas as pd
+import requests
+import os
+import datetime
 
 app = Flask(__name__)
 
 TICKERS = {
-    "BTCUSDT": "Bitcoin",
-    "ETHUSDT": "Ethereum",
-    "SOLUSDT": "Solana"
+    "Bitcoin": "BTC-USD",
+    "Ethereum": "ETH-USD",
+    "Solana": "SOL-USD"
 }
 
-ALERTAS = {}
+ALERTAS = {nome: "—" for nome in TICKERS}
+indicadores = {nome: {"RSI": 0, "MACD": 0, "SIGNAL": 0, "TENDENCIA": "—"} for nome in TICKERS}
+precos = {nome: 0 for nome in TICKERS}
 
-TEMPLATE = '''
-<!DOCTYPE html>
+def calcular_indicadores(data):
+    close = data['Close']
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+
+    exp1 = close.ewm(span=12, adjust=False).mean()
+    exp2 = close.ewm(span=26, adjust=False).mean()
+    macd = exp1 - exp2
+    signal = macd.ewm(span=9, adjust=False).mean()
+
+    return rsi, macd, signal
+
+def buscar_preco_binance(ticker_binance):
+    url = f"https://api.binance.com/api/v3/ticker/price?symbol={ticker_binance}"
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            return float(response.json()['price'])
+    except:
+        return None
+    return None
+
+def atualizar():
+    global precos, indicadores, ALERTAS
+
+    for nome, ticker in TICKERS.items():
+        try:
+            data = yf.download(ticker, period="15d", interval="1h", progress=False)
+            if data.empty:
+                raise ValueError("Dados do Yahoo vazios")
+
+            rsi, macd, signal = calcular_indicadores(data)
+            atual = pd.DataFrame({
+                'RSI': [rsi.iloc[-1]],
+                'MACD': [macd.iloc[-1]],
+                'SIGNAL': [signal.iloc[-1]]
+            })
+
+            preco = float(data['Close'].iloc[-1])
+            precos[nome] = preco
+            indicadores[nome] = {
+                "RSI": round(atual['RSI'].iloc[0], 2),
+                "MACD": round(atual['MACD'].iloc[0], 4),
+                "SIGNAL": round(atual['SIGNAL'].iloc[0], 4),
+                "TENDENCIA": "🔻 Baixa" if atual['MACD'].iloc[0] < atual['SIGNAL'].iloc[0] else "🔺 Alta"
+            }
+
+            rsi_v = atual['RSI'].iloc[0]
+            macd_v = atual['MACD'].iloc[0]
+            sig_v = atual['SIGNAL'].iloc[0]
+
+            if rsi_v < 30 and macd_v > sig_v:
+                ALERTAS[nome] = "🟢 Alerta de COMPRA"
+            elif rsi_v > 70 and macd_v < sig_v:
+                ALERTAS[nome] = "🔴 Alerta de VENDA"
+            else:
+                ALERTAS[nome] = "—"
+
+        except Exception as e:
+            binance_symbol = ticker.replace("-USD", "USDT").replace("-", "")
+            preco_binance = buscar_preco_binance(binance_symbol)
+
+            precos[nome] = preco_binance if preco_binance else 0
+            indicadores[nome] = {"RSI": 0, "MACD": 0, "SIGNAL": 0, "TENDENCIA": "🔻 Erro"}
+            ALERTAS[nome] = f"⚠️ Erro: {str(e).splitlines()[0]}"
+
+@app.route("/")
+def home():
+    atualizar()
+    return render_template_string(TEMPLATE, precos=precos, ind=indicadores, nomes=TICKERS, alertas=ALERTAS)
+
+TEMPLATE = """<!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
+    <meta charset="utf-8">
     <title>FeOliCryptoBot - Painel</title>
-    <style>
-        body { font-family: Arial, sans-serif; text-align: center; }
-        table { border-collapse: collapse; width: 90%; margin: auto; }
-        th, td { border: 1px solid #ccc; padding: 12px; }
-        th { background-color: #f2f2f2; font-size: 20px; }
-        td { font-size: 18px; }
-        .tendencia-alta { color: green; font-weight: bold; }
-        .tendencia-baixa { color: red; font-weight: bold; }
-        .erro { color: red; }
-        .legenda { background-color: #f8f8f8; margin-top: 30px; padding: 20px; width: 80%; margin-left: auto; margin-right: auto; border-radius: 10px; }
-        .legenda p { font-size: 18px; text-align: left; }
-        .verde { color: green; font-weight: bold; }
-        .vermelho { color: red; font-weight: bold; }
-    </style>
 </head>
-<body>
-    <h1>FeOliCryptoBot - Painel</h1>
-    <table>
-        <tr>
+<body style="font-family: Arial; margin: 40px;">
+    <h1 style="text-align:center;">FeOliCryptoBot - Painel</h1>
+    <table border="1" cellspacing="0" cellpadding="8" style="margin:auto; border-collapse: collapse;">
+        <tr style="background-color:#eee;">
             <th>Cripto</th>
             <th>Preço Atual</th>
             <th>RSI</th>
@@ -50,112 +111,27 @@ TEMPLATE = '''
             <th>Tendência</th>
             <th>Último Alerta</th>
         </tr>
-        {% for t, nome in nomes.items() %}
+        {% for nome in nomes %}
         <tr>
             <td>{{ nome }}</td>
-            <td>${{ '%.2f' % precos[t] }}</td>
-            <td>{{ '%.2f' % ind[t]['rsi'] }}</td>
-            <td>{{ '%.4f' % ind[t]['macd'] }}</td>
-            <td>{{ '%.4f' % ind[t]['signal'] }}</td>
-            <td class="{{ 'tendencia-alta' if ind[t]['tendencia'] == 'alta' else 'tendencia-baixa' }}">
-                {{ '▲ Alta' if ind[t]['tendencia'] == 'alta' else '▼ Baixa' }}
-            </td>
-            <td>
-                {% if alertas[t] == 1 %}
-                    🟢 Alerta de Compra
-                {% elif alertas[t] == -1 %}
-                    🔴 Alerta de Venda
-                {% elif alertas[t] == 0 %}
-                    —
-                {% else %}
-                    ⚠️ Erro: {{ alertas[t] }}
-                {% endif %}
-            </td>
+            <td>${{ '%.2f' % precos[nome] }}</td>
+            <td>{{ '%.2f' % ind[nome]["RSI"] }}</td>
+            <td>{{ '%.4f' % ind[nome]["MACD"] }}</td>
+            <td>{{ '%.4f' % ind[nome]["SIGNAL"] }}</td>
+            <td><strong>{{ ind[nome]["TENDENCIA"] }}</strong></td>
+            <td>{{ alertas[nome] }}</td>
         </tr>
         {% endfor %}
     </table>
-
-    <div class="legenda">
+    <div style="margin:40px auto; width:80%; background:#f7f7f7; padding:20px; border-radius:8px;">
         <h3>📘 Legenda dos Alertas:</h3>
-        <p>🟢 <span class="verde">Alerta de COMPRA</span>: RSI abaixo de 30 <u>e</u> MACD cruzando acima da Signal</p>
-        <p>🔴 <span class="vermelho">Alerta de VENDA</span>: RSI acima de 70 <u>e</u> MACD cruzando abaixo da Signal</p>
+        <p>🟢 <strong>Alerta de COMPRA</strong>: RSI abaixo de 30 <u>e</u> MACD cruzando acima da Signal</p>
+        <p>🔴 <strong>Alerta de VENDA</strong>: RSI acima de 70 <u>e</u> MACD cruzando abaixo da Signal</p>
     </div>
-
-    <p style="margin-top: 30px; color: gray;">Atualizado a cada minuto (modo debug)</p>
+    <p style="text-align:center; color:gray;">Atualizado a cada minuto (modo debug)</p>
 </body>
-</html>
-'''
-
-def fetch_binance_ohlc(symbol, interval="1d", limit=100):
-    url = "https://api.binance.com/api/v3/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
-    response = requests.get(url, params=params)
-    data = response.json()
-    df = pd.DataFrame(data, columns=[
-        "open_time", "open", "high", "low", "close", "volume", "close_time",
-        "quote_asset_volume", "number_of_trades", "taker_buy_base", "taker_buy_quote", "ignore"
-    ])
-    df["close"] = pd.to_numeric(df["close"])
-    df["timestamp"] = pd.to_datetime(df["close_time"], unit="ms")
-    df.set_index("timestamp", inplace=True)
-    return df
-
-def calcula_indicadores(df):
-    close = df["close"]
-    delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-
-    ema12 = close.ewm(span=12, adjust=False).mean()
-    ema26 = close.ewm(span=26, adjust=False).mean()
-    macd = ema12 - ema26
-    signal = macd.ewm(span=9, adjust=False).mean()
-
-    return rsi, macd, signal
-
-@app.route("/")
-def home():
-    precos = {}
-    indicadores = {}
-    for t in TICKERS:
-        try:
-            df = fetch_binance_ohlc(t)
-            if df.empty or len(df) < 30:
-                raise ValueError("Dados insuficientes")
-
-            rsi, macd, signal = calcula_indicadores(df)
-            atual = df.iloc[-1]
-            precos[t] = float(atual["close"])
-
-            rsi_val = rsi.iloc[-1]
-            macd_val = macd.iloc[-1]
-            signal_val = signal.iloc[-1]
-
-            tendencia = "alta" if macd_val > signal_val else "baixa"
-
-            indicadores[t] = {
-                "rsi": rsi_val,
-                "macd": macd_val,
-                "signal": signal_val,
-                "tendencia": tendencia
-            }
-
-            # alerta
-            if rsi_val < 30 and macd_val > signal_val:
-                ALERTAS[t] = 1
-            elif rsi_val > 70 and macd_val < signal_val:
-                ALERTAS[t] = -1
-            else:
-                ALERTAS[t] = 0
-
-        except Exception as e:
-            precos[t] = 0.0
-            indicadores[t] = {"rsi": 0, "macd": 0, "signal": 0, "tendencia": "baixa"}
-            ALERTAS[t] = str(e)
-
-    return render_template_string(TEMPLATE, precos=precos, ind=indicadores, nomes=TICKERS, alertas=ALERTAS)
+</html>"""
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
