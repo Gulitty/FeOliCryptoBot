@@ -17,6 +17,7 @@ cryptos = {
 
 ultimo_alerta = {}
 precos_atuais = {}
+indicadores = {}
 
 def get_rsi(data, period=14):
     delta = data['Close'].diff()
@@ -61,6 +62,7 @@ def analisar(ticker):
     signal = atual['Signal'].item()
 
     precos_atuais[ticker] = preco
+    indicadores[ticker] = {"rsi": rsi, "macd": macd, "signal": signal}
 
     chave = f"{ticker}_compra" if rsi < 30 and anterior['MACD'] < anterior['Signal'] and macd > signal else f"{ticker}_venda" if rsi > 70 and anterior['MACD'] > anterior['Signal'] and macd < signal else None
 
@@ -81,19 +83,21 @@ def painel():
     <body style="font-family:sans-serif;padding:20px;">
     <h1>FeOliCryptoBot - Painel</h1>
     <table border="1" cellpadding="10">
-        <tr><th>Cripto</th><th>Preço Atual</th><th>Último Alerta</th></tr>
+        <tr><th>Cripto</th><th>Preço Atual</th><th>RSI</th><th>MACD</th><th>Último Alerta</th></tr>
         {% for k,v in precos.items() %}
         <tr>
             <td>{{ nomes[k] }}</td>
             <td>${{ '%.2f' % v }}</td>
+            <td>{{ '%.2f' % ind[k]['rsi'] }}</td>
+            <td>{{ '%.4f' % ind[k]['macd'] }}</td>
             <td>{{ alertas.get(k, '—') }}</td>
         </tr>
         {% endfor %}
     </table>
-    <p style="margin-top:20px;font-size:0.9em;color:gray;">Atualizado a cada hora</p>
+    <p style="margin-top:20px;font-size:0.9em;color:gray;">Atualizado a cada minuto (modo debug)</p>
     </body></html>
     '''
-    return render_template_string(html, precos=precos_atuais, alertas=ultimo_alerta, nomes=cryptos)
+    return render_template_string(html, precos=precos_atuais, alertas=ultimo_alerta, nomes=cryptos, ind=indicadores)
 
 def loop_principal():
     while True:
@@ -102,7 +106,7 @@ def loop_principal():
                 analisar(ativo)
             except Exception as erro:
                 send_telegram(f"⚠️ Erro analisando {ativo}: {erro}")
-        time.sleep(3600)
+        time.sleep(60)  # modo debug: 60 segundos
 
 # Iniciar análise em thread separada
 threading.Thread(target=loop_principal, daemon=True).start()
