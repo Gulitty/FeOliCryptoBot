@@ -9,4 +9,4 @@ def send_telegram(message):
     response = requests.post(url, data=data)
     print(response.text)
 
-send_telegram("🔔 Alerta de teste do FeOliCryptoBot (Render)")
+send_telegram("🔔 Alerta de teste atualizado do FeOliCryptoBot (Render)")
