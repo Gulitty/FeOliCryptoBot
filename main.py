@@ -1,126 +1,85 @@
 
+from flask import Flask, render_template_string
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import time
-import requests
 import threading
-from flask import Flask, render_template_string
+import requests
 
-TOKEN = "7733542207:AAEgogN0zgimnJEo1Q3vNaQX6Ayc7tpHF_s"
-CHAT_ID = "6290071192"
-
-cryptos = {
-    'BTC-USD': 'Bitcoin',
-    'ETH-USD': 'Ethereum',
-    'SOL-USD': 'Solana'
-}
-
-ultimo_alerta = {}
-precos_atuais = {}
-indicadores = {}
-
-def get_rsi(data, period=14):
-    delta = data['Close'].diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = -delta.where(delta < 0, 0.0)
-    avg_gain = gain.rolling(window=period).mean()
-    avg_loss = loss.rolling(window=period).mean()
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-def get_macd(data):
-    short_ema = data['Close'].ewm(span=12, adjust=False).mean()
-    long_ema = data['Close'].ewm(span=26, adjust=False).mean()
-    macd = short_ema - long_ema
-    signal = macd.ewm(span=9, adjust=False).mean()
-    return macd, signal
-
-def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": message}
-    try:
-        requests.post(url, data=data)
-    except Exception as e:
-        print("Erro ao enviar mensagem:", e)
-
-def analisar(ticker):
-    df = yf.download(ticker, interval="1h", period="7d", progress=False)
-    if df.empty:
-        return
-
-    df['RSI'] = get_rsi(df)
-    df['MACD'], df['Signal'] = get_macd(df)
-
-    atual = df.iloc[-1]
-    anterior = df.iloc[-2]
-
-    nome = cryptos[ticker]
-    preco = atual['Close'].item()
-    rsi = atual['RSI'].item()
-    macd = atual['MACD'].item()
-    signal = atual['Signal'].item()
-
-    precos_atuais[ticker] = preco
-    indicadores[ticker] = {"rsi": rsi, "macd": macd, "signal": signal}
-
-    chave = f"{ticker}_compra" if rsi < 30 and anterior['MACD'] < anterior['Signal'] and macd > signal else f"{ticker}_venda" if rsi > 70 and anterior['MACD'] > anterior['Signal'] and macd < signal else None
-
-    if chave:
-        if ultimo_alerta.get(ticker) != chave:
-            tipo = "🟢 COMPRA" if "compra" in chave else "🔴 VENDA"
-            msg = f"{tipo} sinalizado para {nome}\nPreço: ${preco:.2f}\nRSI: {rsi:.2f}\nMACD: {macd:.4f} | Signal: {signal:.4f}"
-            ultimo_alerta[ticker] = chave
-            send_telegram(msg)
-
-# Flask App
 app = Flask(__name__)
 
-@app.route("/")
-def painel():
-    html = '''
-    <html><head><title>Status CriptoBot</title></head>
-    <body style="font-family:sans-serif;padding:20px;">
-    <h1>FeOliCryptoBot - Painel</h1>
-    <table border="1" cellpadding="10">
-        <tr><th>Cripto</th><th>Preço Atual</th><th>RSI</th><th>MACD</th><th>Signal</th><th>Tendência</th><th>Último Alerta</th></tr>
-        {% for k,v in precos.items() %}
-        <tr>
-            <td>{{ nomes[k] }}</td>
-            <td>${{ '%.2f' % v }}</td>
-            <td>{{ '%.2f' % ind[k]['rsi'] }}</td>
-            <td>{{ '%.4f' % ind[k]['macd'] }}</td>
-            <td>{{ '%.4f' % ind[k]['signal'] }}</td>
-            <td>
-                {% if ind[k]['macd'] > ind[k]['signal'] %}
-                    <span style="color:green;">▲ Alta</span>
-                {% elif ind[k]['macd'] < ind[k]['signal'] %}
-                    <span style="color:red;">▼ Baixa</span>
-                {% else %}
-                    ↔ Neutro
-                {% endif %}
-            </td>
-            <td>{{ alertas.get(k, '—') }}</td>
-        </tr>
-        {% endfor %}
-    </table>
-    <p style="margin-top:20px;font-size:0.9em;color:gray;">Atualizado a cada minuto (modo debug)</p>
-    </body></html>
-    '''
-    return render_template_string(html, precos=precos_atuais, alertas=ultimo_alerta, nomes=cryptos, ind=indicadores)
+TICKERS = {
+    "BTC-USD": "Bitcoin",
+    "ETH-USD": "Ethereum",
+    "SOL-USD": "Solana"
+}
 
-def loop_principal():
+CHAT_ID = "6290071192"
+TOKEN = "7733542207:AAEgogN0zgimnJEo1Q3vNaQX6Ayc7tpHF_s"
+ALERTAS = {}
+DEBUG = True
+
+def send_telegram(msg):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": msg}
+    try:
+        r = requests.post(url, json=payload)
+    except:
+        pass
+
+def analisar():
+    global precos, indicadores, ALERTAS
+    precos = {}
+    indicadores = {}
+
+    for t, nome in TICKERS.items():
+        try:
+            df = yf.download(t, period="3mo", interval="1d", progress=False)
+            df.dropna(inplace=True)
+            close = df["Close"]
+
+            rsi = 100 - (100 / (1 + (close.pct_change().rolling(14).mean() /
+                                     close.pct_change().rolling(14).std())))
+            exp1 = close.ewm(span=12, adjust=False).mean()
+            exp2 = close.ewm(span=26, adjust=False).mean()
+            macd = exp1 - exp2
+            signal = macd.ewm(span=9, adjust=False).mean()
+
+            atual = {
+                "rsi": rsi.iloc[-1],
+                "macd": macd.iloc[-1],
+                "signal": signal.iloc[-1]
+            }
+
+            precos[t] = float(close.iloc[-1])
+            indicadores[t] = atual
+
+            # ALERTAS
+            alerta = None
+            if atual["rsi"] < 30 and atual["macd"] > atual["signal"]:
+                alerta = f"🟢 Alerta de COMPRA em {nome}"
+            elif atual["rsi"] > 70 and atual["macd"] < atual["signal"]:
+                alerta = f"🔴 Alerta de VENDA em {nome}"
+
+            if alerta and ALERTAS.get(t) != alerta:
+                send_telegram(alerta)
+                ALERTAS[t] = alerta
+
+        except Exception as e:
+            send_telegram(f"⚠️ Erro analisando {t}: {e}")
+
+def atualizar():
     while True:
-        for ativo in cryptos.keys():
-            try:
-                analisar(ativo)
-            except Exception as erro:
-                send_telegram(f"⚠️ Erro analisando {ativo}: {erro}")
-        time.sleep(60)
+        analisar()
+        time.sleep(60 if DEBUG else 3600)
 
-# Iniciar análise em thread separada
-threading.Thread(target=loop_principal, daemon=True).start()
+@app.route("/")
+def home():
+    return render_template_string(TEMPLATE, precos=precos, ind=indicadores, nomes=TICKERS, alertas=ALERTAS)
 
-# Iniciar servidor Flask
+TEMPLATE = """" + legenda_template + """""
+
 if __name__ == "__main__":
+    threading.Thread(target=atualizar, daemon=True).start()
     app.run(host="0.0.0.0", port=8080)
