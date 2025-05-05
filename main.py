@@ -56,9 +56,9 @@ def analisar(ticker):
 
     nome = cryptos[ticker]
     preco = atual['Close']
-    rsi = atual['RSI']
-    macd = atual['MACD']
-    signal = atual['Signal']
+        rsi = atual['RSI'].item()
+    macd = atual['MACD'].item()
+    signal = atual['Signal'].item()
 
     msg = None
     chave = f"{ticker}_compra" if rsi < 30 and anterior['MACD'] < anterior['Signal'] and macd > signal else f"{ticker}_venda" if rsi > 70 and anterior['MACD'] > anterior['Signal'] and macd < signal else None
