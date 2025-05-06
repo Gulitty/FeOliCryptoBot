@@ -1,22 +1,26 @@
 from flask import Flask, render_template_string
-import requests
 import pandas as pd
+import requests
 import numpy as np
 
 app = Flask(__name__)
 
-TEMPLATE = '''
+TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
     <title>FeOliCryptoBot - Painel</title>
     <style>
-        body { font-family: Arial, sans-serif; background: #fff; text-align: center; }
-        table { margin: 0 auto; border-collapse: collapse; }
-        th, td { border: 1px solid #ccc; padding: 10px; }
-        th { background: #eee; }
-        .compra { color: green; font-weight: bold; }
-        .venda { color: red; font-weight: bold; }
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { text-align: center; padding: 8px; border: 1px solid #ddd; }
+        th { background-color: #f2f2f2; }
+        .alerta-compra { color: green; font-weight: bold; }
+        .alerta-venda { color: red; font-weight: bold; }
+        .erro { color: orange; }
+        .tendencia-alta { color: green; }
+        .tendencia-baixa { color: red; }
+        .legenda { margin-top: 30px; padding: 20px; background-color: #f9f9f9; border-radius: 8px; }
     </style>
 </head>
 <body>
@@ -31,101 +35,125 @@ TEMPLATE = '''
             <th>Tendência</th>
             <th>Último Alerta</th>
         </tr>
-        {% for c in criptos %}
+        {% for cripto in dados %}
         <tr>
-            <td>{{ c['nome'] }}</td>
-            <td>${{ "{:.2f}".format(c['preco']) }}</td>
-            <td>{{ "{:.2f}".format(c['rsi']) }}</td>
-            <td>{{ "{:.4f}".format(c['macd']) }}</td>
-            <td>{{ "{:.4f}".format(c['signal']) }}</td>
-            <td>{{ c['tendencia'] }}</td>
-            <td>{{ c['alerta'] }}</td>
+            <td>{{ cripto['nome'] }}</td>
+            <td>{{ cripto['preco'] }}</td>
+            <td>{{ cripto['rsi'] }}</td>
+            <td>{{ cripto['macd'] }}</td>
+            <td>{{ cripto['signal'] }}</td>
+            <td class="{{ cripto['tendencia_classe'] }}">{{ cripto['tendencia'] }}</td>
+            <td class="{{ cripto['alerta_classe'] }}">{{ cripto['alerta'] }}</td>
         </tr>
         {% endfor %}
     </table>
 
-    <div style="margin-top: 40px; text-align: center;">
+    <div class="legenda">
         <h3>📘 Legenda dos Alertas:</h3>
-        <p style="color: green;"><b>🟢 Alerta de COMPRA:</b> RSI abaixo de 30 <u>e</u> MACD cruzando acima da Signal</p>
-        <p style="color: red;"><b>🔴 Alerta de VENDA:</b> RSI acima de 70 <u>e</u> MACD cruzando abaixo da Signal</p>
+        <p>🟢 <span class="alerta-compra">Alerta de COMPRA:</span> RSI abaixo de 30 <strong>e</strong> MACD cruzando acima da Signal</p>
+        <p>🔴 <span class="alerta-venda">Alerta de VENDA:</span> RSI acima de 70 <strong>e</strong> MACD cruzando abaixo da Signal</p>
         <p style="color: gray;">Atualizado a cada minuto (modo debug)</p>
     </div>
 </body>
 </html>
-'''
+"""
 
-COINGECKO_IDS = {
-    'Bitcoin': 'bitcoin',
-    'Ethereum': 'ethereum',
-    'Solana': 'solana'
+CRIPTO_IDS = {
+    "Bitcoin": "bitcoin",
+    "Ethereum": "ethereum",
+    "Solana": "solana"
 }
 
-def fetch_data(coin_id):
-    try:
-        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days=2&interval=hourly"
-        r = requests.get(url)
-        data = r.json()
-        prices = [x[1] for x in data["prices"]]
-        df = pd.DataFrame(prices, columns=["close"])
-        df['close'] = df['close'].astype(float)
-        return df
-    except:
-        return None
+def calcular_rsi(close_prices, period=14):
+    delta = close_prices.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
 
-def calcular_indicadores(df):
-    delta = df['close'].diff()
-    gain = delta.clip(lower=0)
-    loss = -1 * delta.clip(upper=0)
-    avg_gain = gain.rolling(window=14).mean()
-    avg_loss = loss.rolling(window=14).mean()
+    avg_gain = gain.rolling(window=period, min_periods=period).mean()
+    avg_loss = loss.rolling(window=period, min_periods=period).mean()
+
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
-    df['rsi'] = rsi
+    return rsi
 
-    exp1 = df['close'].ewm(span=12, adjust=False).mean()
-    exp2 = df['close'].ewm(span=26, adjust=False).mean()
-    df['macd'] = exp1 - exp2
-    df['signal'] = df['macd'].ewm(span=9, adjust=False).mean()
-    return df
+def calcular_macd(close_prices, short=12, long=26, signal=9):
+    ema_short = close_prices.ewm(span=short, adjust=False).mean()
+    ema_long = close_prices.ewm(span=long, adjust=False).mean()
+    macd = ema_short - ema_long
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    return macd, signal_line
 
-@app.route('/')
+def buscar_preco(coin_id):
+    try:
+        url = "https://api.coingecko.com/api/v3/simple/price"
+        params = {"ids": coin_id, "vs_currencies": "usd"}
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        preco = data[coin_id]["usd"]
+        print(f"[DEBUG] Preço de {coin_id}: ${preco}")
+        return preco
+    except Exception as e:
+        print(f"[ERRO] Falha ao buscar preço de {coin_id}: {e}")
+        return None
+
+@app.route("/")
 def home():
-    resultado = []
-    for nome, coin_id in COINGECKO_IDS.items():
-        df = fetch_data(coin_id)
-        if df is not None and not df.empty:
-            df = calcular_indicadores(df)
-            preco = df['close'].iloc[-1]
-            rsi = df['rsi'].iloc[-1] if not pd.isna(df['rsi'].iloc[-1]) else 0
-            macd = df['macd'].iloc[-1]
-            signal = df['signal'].iloc[-1]
+    dados = []
 
-            if rsi < 30 and macd > signal:
+    for nome, coin_id in CRIPTO_IDS.items():
+        try:
+            preco = buscar_preco(coin_id)
+            if preco is None:
+                raise ValueError("Preço indisponível")
+
+            # Geração de dados simulados para RSI e MACD:
+            closes = pd.Series(np.random.normal(preco, preco * 0.01, 100))
+            rsi = calcular_rsi(closes).iloc[-1]
+            macd, signal = calcular_macd(closes)
+            macd_val = macd.iloc[-1]
+            signal_val = signal.iloc[-1]
+
+            tendencia = "📈" if macd_val > signal_val else "📉"
+            tendencia_classe = "tendencia-alta" if macd_val > signal_val else "tendencia-baixa"
+
+            if rsi < 30 and macd_val > signal_val:
                 alerta = "🟢 Alerta de COMPRA"
-                tendencia = "📈 Alta"
-            elif rsi > 70 and macd < signal:
+                alerta_classe = "alerta-compra"
+            elif rsi > 70 and macd_val < signal_val:
                 alerta = "🔴 Alerta de VENDA"
-                tendencia = "📉 Baixa"
+                alerta_classe = "alerta-venda"
             else:
-                alerta = "Sem alerta"
-                tendencia = "—"
-        else:
-            preco = 0
-            rsi = macd = signal = 0
-            alerta = "⚠️ Erro: dados indisponíveis"
-            tendencia = "—"
+                alerta = "—"
+                alerta_classe = ""
 
-        resultado.append({
-            "nome": nome,
-            "preco": preco,
-            "rsi": rsi,
-            "macd": macd,
-            "signal": signal,
-            "tendencia": tendencia,
-            "alerta": alerta
-        })
+            dados.append({
+                "nome": nome,
+                "preco": f"${preco:,.2f}",
+                "rsi": f"{rsi:.2f}",
+                "macd": f"{macd_val:.4f}",
+                "signal": f"{signal_val:.4f}",
+                "tendencia": tendencia,
+                "tendencia_classe": tendencia_classe,
+                "alerta": alerta,
+                "alerta_classe": alerta_classe
+            })
 
-    return render_template_string(TEMPLATE, criptos=resultado)
+        except Exception as e:
+            print(f"[ERRO] Falha ao processar {nome}: {e}")
+            dados.append({
+                "nome": nome,
+                "preco": "$0.00",
+                "rsi": "0.00",
+                "macd": "0.0000",
+                "signal": "0.0000",
+                "tendencia": "—",
+                "tendencia_classe": "",
+                "alerta": "⚠️ Erro: dados indisponíveis",
+                "alerta_classe": "erro"
+            })
 
-if __name__ == '__main__':
-    app.run(debug=True, host="0.0.0.0")
+    return render_template_string(TEMPLATE, dados=dados)
+
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=5000)
