@@ -1,26 +1,69 @@
 from flask import Flask, render_template
 import requests
+import pandas as pd
+import os
 
 app = Flask(__name__)
 
-def get_price(coin_id):
-    url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+CRYPTOS = {
+    'bitcoin': 'BTC',
+    'ethereum': 'ETH',
+    'solana': 'SOL'
+}
+
+def format_price(price):
+    return f"${price:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+def get_price(coin):
     try:
-        response = requests.get(url, timeout=5)
-        response.raise_for_status()
-        data = response.json()
-        return data[coin_id]['usd']
-    except Exception as e:
-        print(f"Erro ao buscar {coin_id}: {e}")
-        return 0
+        url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin}&vs_currencies=usd"
+        response = requests.get(url)
+        return response.json()[coin]['usd']
+    except:
+        return 0.0
 
-@app.route('/')
-def home():
-    btc_price = get_price("bitcoin")
-    eth_price = get_price("ethereum")
-    sol_price = get_price("solana")
-    
-    return render_template("index.html", btc=btc_price, eth=eth_price, sol=sol_price)
+def get_mock_indicators(symbol):
+    # MOCKS — Substitua futuramente por dados reais
+    return {
+        "RSI": round(30 + hash(symbol) % 40, 2),
+        "MACD": round(hash(symbol + "macd") % 100 - 50, 2),
+        "Signal": round(hash(symbol + "signal") % 100 - 50, 2),
+        "Tendência": "Compra" if hash(symbol) % 2 == 0 else "Venda"
+    }
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+def send_alert(crypto, price, tendencia):
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        msg = f"📊 Alerta para {crypto.upper()}:\nPreço: {format_price(price)}\nTendência: {tendencia}"
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
+        requests.post(url, data=data)
+
+@app.route("/")
+def index():
+    data = []
+
+    for coin_id, symbol in CRYPTOS.items():
+        price = get_price(coin_id)
+        indicators = get_mock_indicators(symbol)
+        data.append({
+            "Cripto": symbol,
+            "Preço Atual": format_price(price),
+            "RSI": indicators["RSI"],
+            "MACD": indicators["MACD"],
+            "Signal": indicators["Signal"],
+            "Tendência": indicators["Tendência"]
+        })
+
+        # Enviar alerta se for compra ou venda
+        if indicators["Tendência"] in ["Compra", "Venda"]:
+            send_alert(symbol, price, indicators["Tendência"])
+
+    return render_template("index.html", cryptos=data)
+
+if __name__ == "__main__":
+    import os
+port = int(os.environ.get("PORT", 5000))
+app.run(debug=True, host="0.0.0.0", port=port)
