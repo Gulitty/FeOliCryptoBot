@@ -1,71 +1,76 @@
-import os
-import requests
 from flask import Flask, render_template
-from datetime import datetime
-from dotenv import load_dotenv
-
-load_dotenv()
+import requests
+import time
+import os
 
 app = Flask(__name__)
 
-TOKEN = os.getenv("TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-COINS = ["bitcoin", "ethereum", "solana"]
-SYMBOLS = {"bitcoin": "BTC", "ethereum": "ETH", "solana": "SOL"}
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-def fetch_data():
-    url = f"https://api.coingecko.com/api/v3/simple/price?ids={','.join(COINS)}&vs_currencies=usd"
-    response = requests.get(url)
-    prices = response.json()
+cryptos = {
+    "bitcoin": {"symbol": "BTC", "color": "🟡"},
+    "ethereum": {"symbol": "ETH", "color": "🔵"},
+    "solana": {"symbol": "SOL", "color": "🟣"},
+}
 
-    indicadores = {}
-    for coin in COINS:
-        price = prices.get(coin, {}).get("usd", 0)
-        rsi = round(50 + (price % 20 - 10), 2)
-        macd = round((price % 5) - 2.5, 2)
-        signal = round(macd - (macd * 0.8), 2)
-        tendencia = "📈 Alta" if macd > signal else "📉 Baixa"
+def format_price(value):
+    return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-        indicadores[coin] = {
-            "price": price,
+def get_crypto_data():
+    url = "https://api.coingecko.com/api/v3/simple/price"
+    ids = ",".join(cryptos.keys())
+    params = {"ids": ids, "vs_currencies": "usd"}
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        prices = response.json()
+    except Exception as e:
+        print("Erro ao buscar dados do CoinGecko:", e)
+        prices = {}
+
+    data = {}
+    for name in cryptos:
+        price = prices.get(name, {}).get("usd", 0)
+        rsi = round(30 + (price % 20), 2)
+        macd = round(1 + (price % 3), 2)
+        signal = round(1 + ((price + 5) % 3), 2)
+        tendencia = "🔺 Compra" if macd > signal and rsi < 30 else "🔻 Venda" if macd < signal and rsi > 70 else "🔸 Neutra"
+
+        data[name] = {
+            "preco": price,
+            "preco_formatado": format_price(price),
             "rsi": rsi,
             "macd": macd,
             "signal": signal,
-            "tendencia": tendencia
+            "tendencia": tendencia,
+            "color": cryptos[name]["color"],
+            "symbol": cryptos[name]["symbol"],
         }
 
-    return indicadores
+    return data
 
-def formatar_preco(valor):
-    return f"${valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-def enviar_alertas(indicadores):
-    if not TOKEN or not CHAT_ID:
+def enviar_alerta(criptomoeda, tendencia, preco_formatado):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
 
-    for coin, data in indicadores.items():
-        if data["macd"] > data["signal"]:
-            texto = f"🚨 COMPRA: {SYMBOLS[coin]} com MACD acima do Signal!\nRSI: {data['rsi']}"
-        elif data["macd"] < data["signal"]:
-            texto = f"⚠️ VENDA: {SYMBOLS[coin]} com MACD abaixo do Signal!\nRSI: {data['rsi']}"
-        else:
-            texto = f"🔍 OBSERVAÇÃO: {SYMBOLS[coin]} está neutro.\nRSI: {data['rsi']}"
-        requests.get(f"https://api.telegram.org/bot{TOKEN}/sendMessage?chat_id={CHAT_ID}&text={texto}")
+    mensagem = f"🚨 Alerta de Tendência\n\n{criptomoeda.upper()} - {tendencia}\nPreço atual: {preco_formatado}"
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {"chat_id": TELEGRAM_CHAT_ID, "text": mensagem}
+    try:
+        requests.post(url, data=data, timeout=10)
+    except Exception as e:
+        print("Erro ao enviar alerta para Telegram:", e)
 
 @app.route("/")
 def index():
-    dados = fetch_data()
-    enviar_alertas(dados)
+    data = get_crypto_data()
 
-    return render_template("index.html",
-        btc=formatar_preco(dados["bitcoin"]["price"]),
-        eth=formatar_preco(dados["ethereum"]["price"]),
-        sol=formatar_preco(dados["solana"]["price"]),
-        btc_data=dados["bitcoin"],
-        eth_data=dados["ethereum"],
-        sol_data=dados["solana"]
-    )
+    for nome, info in data.items():
+        if info["tendencia"] in ["🔺 Compra", "🔻 Venda"]:
+            enviar_alerta(info["symbol"], info["tendencia"], info["preco_formatado"])
+
+    return render_template("index.html", cryptos=data)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5055))
-    app.run(debug=True, port=port)
+    app.run(host="0.0.0.0", port=port, debug=True)
