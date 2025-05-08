@@ -2,75 +2,111 @@
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <title>FeOliCryptoBot</title>
+    <title>FeOliCryptoBot - Painel</title>
     <style>
         body {
-            background-color: #121212;
-            color: #f5f5f5;
             font-family: Arial, sans-serif;
+            background-color: #111;
+            color: #f5f5f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            min-height: 100vh;
             margin: 0;
-            padding: 0;
         }
         .container {
-            max-width: 960px;
-            margin: 50px auto;
-            padding: 20px;
             background-color: #1e1e1e;
-            border-radius: 8px;
-            box-shadow: 0 0 10px rgba(255,255,255,0.1);
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.1);
+            width: 90%;
+            max-width: 1000px;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 25px;
         }
         table {
             width: 100%;
             border-collapse: collapse;
+            margin-bottom: 25px;
         }
         th, td {
-            padding: 14px;
-            border-bottom: 1px solid #444;
+            padding: 12px;
             text-align: center;
         }
         th {
-            background-color: #222;
-        }
-        tr:hover {
             background-color: #2c2c2c;
+            font-weight: bold;
         }
-        .footer {
-            margin-top: 30px;
-            font-size: 0.95em;
-            color: #aaa;
+        tr:nth-child(even) {
+            background-color: #2a2a2a;
+        }
+        .bullish {
+            color: lightgreen;
+            font-weight: bold;
+        }
+        .bearish {
+            color: red;
+            font-weight: bold;
+        }
+        .neutral {
+            color: orange;
+            font-weight: bold;
+        }
+        .legend {
+            font-size: 1em;
+            background-color: #2c2c2c;
+            padding: 15px;
+            border-radius: 10px;
+            color: #eee;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1 style="text-align:center;">📊 Painel Cripto - FeOliCryptoBot</h1>
+        <h1>📊 Painel Cripto - FeOliCryptoBot</h1>
         <table>
             <tr>
                 <th>Cripto</th>
                 <th>Preço Atual</th>
                 <th>RSI</th>
                 <th>MACD</th>
-                <th>Sinal</th>
+                <th>Signal</th>
                 <th>Tendência</th>
                 <th>Último Alerta</th>
             </tr>
-            {% for nome, dados in cryptos.items() %}
-                {% if dados.preco is defined %}
-                <tr>
-                    <td>{{ nome }}</td>
-                    <td>R$ {{ "{:,.2f}".format(dados.preco).replace(",", "X").replace(".", ",").replace("X", ".") }}</td>
-                    <td>{{ dados.rsi }}</td>
-                    <td>{{ "%.2f"|format(dados.macd) }}</td>
-                    <td>{{ "%.2f"|format(dados.signal) }}</td>
-                    <td>{{ dados.tendencia }}</td>
-                    <td>{{ dados.alerta }}</td>
-                </tr>
-                {% endif %}
+            {% for key, value in cryptos.items() %}
+            <tr>
+                <td>{{ key }}</td>
+                <td>R$ {{ "{:,.2f}".format(value["price"]).replace(",", "X").replace(".", ",").replace("X", ".") }}</td>
+                <td>{{ value["rsi"] }}</td>
+                <td>{{ "%.4f" | format(value["macd"]) }}</td>
+                <td>{{ "%.4f" | format(value["signal"]) }}</td>
+                <td class="{% if value["trend"] == 'Alta' %}bullish{% elif value["trend"] == 'Baixa' %}bearish{% else %}neutral{% endif %}">
+                    {% if value["trend"] == 'Alta' %}
+                        🔼 Alta
+                    {% elif value["trend"] == 'Baixa' %}
+                        🔽 Baixa
+                    {% else %}
+                        🔶 Neutra
+                    {% endif %}
+                </td>
+                <td>{{ value["alert"] }}</td>
+            </tr>
             {% endfor %}
         </table>
-
-        <div class="footer">
-            <p><strong>ℹ️ Legenda:</strong> Cruzamento do MACD acima do Signal e RSI entre 40 e 60 indica compra. Cruzamento abaixo indica venda.</p>
+        <div class="legend">
+            <p style="font-size: 1em;">
+                <strong>ℹ️ Legenda:</strong>
+                <br>
+                🟢 <strong>Alerta de Compra:</strong> MACD cruzando acima do Signal <em>e</em> RSI entre <strong>40 e 60</strong>.
+                <br>
+                🔴 <strong>Alerta de Venda:</strong> MACD cruzando abaixo do Signal <em>ou</em> RSI acima de <strong>70</strong> ou abaixo de <strong>30</strong>.
+                <br>
+                🔶 <strong>Neutra:</strong> Nenhuma das condições acima foi atingida.
+            </p>
         </div>
     </div>
 </body>
