@@ -11,43 +11,52 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
-            height: 100vh;
+            padding: 30px;
         }
         .container {
             background: #1e1e1e;
-            padding: 40px;
+            padding: 30px 50px;
             border-radius: 8px;
-            box-shadow: 0 0 10px rgba(255,255,255,0.1);
-            text-align: center;
+            box-shadow: 0 0 15px rgba(255,255,255,0.1);
+            width: 100%;
+            max-width: 700px;
         }
         .price {
-            font-size: 2em;
-            margin-top: 15px;
+            font-size: 1.6em;
+            margin: 20px 0 10px;
+        }
+        .signal {
+            font-size: 1em;
+            color: #aaa;
+        }
+        .legend {
+            margin-top: 40px;
+            font-size: 0.9em;
+            color: #bbb;
+            border-top: 1px solid #444;
+            padding-top: 15px;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>💹 Preços Atuais</h1>
+        <h1>💹 Painel Cripto</h1>
 
-        {% if btc > 0 %}
-            <div class="price">🟡 Bitcoin (BTC): ${{ '%.2f' | format(btc) }} USD</div>
-        {% else %}
-            <div class="price">Bitcoin: ⚠️ Dados indisponíveis</div>
-        {% endif %}
+        {% for key, value in cryptos.items() %}
+            {% if value.price > 0 %}
+                <div class="price">
+                    {{ value.emoji }} {{ value.name }} ({{ key.upper() }}): R${{ "%.2f"|format(value.price|round)|replace('.', ',') }}
+                </div>
+                <div class="signal">RSI: {{ value.rsi }} | MACD: {{ value.macd }} | Sinal: {{ value.signal }} | Tendência: {{ value.trend }}</div>
+            {% else %}
+                <div class="price">{{ value.name }}: ⚠️ Dados indisponíveis</div>
+            {% endif %}
+        {% endfor %}
 
-        {% if eth > 0 %}
-            <div class="price">🔵 Ethereum (ETH): ${{ '%.2f' | format(eth) }} USD</div>
-        {% else %}
-            <div class="price">Ethereum: ⚠️ Dados indisponíveis</div>
-        {% endif %}
-
-        {% if sol > 0 %}
-            <div class="price">🟣 Solana (SOL): ${{ '%.2f' | format(sol) }} USD</div>
-        {% else %}
-            <div class="price">Solana: ⚠️ Dados indisponíveis</div>
-        {% endif %}
+        <div class="legend">
+            🧠 Legenda: Cruzamento do MACD com o RSI pode indicar <strong>ponto de compra</strong> ou <strong>venda</strong>.<br>
+            Exemplo: MACD cruzando o Signal de baixo para cima + RSI subindo → possível compra.
+        </div>
     </div>
 </body>
 </html>
