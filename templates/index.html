@@ -82,9 +82,9 @@
                 <td>{{ nome }}</td>
                 <td>
                     {% if value.get("price") is not none %}
-                        R$ {{ "{:,.2f}".format(value.get("price", 0)).replace(",", "X").replace(".", ",").replace("X", ".") }}
+                        $ {{ "{:,.2f}".format(value.get("price", 0)).replace(",", "X").replace(".", ",").replace("X", ".") }}
                     {% else %}
-                        R$ 0,00
+                        $ 0,00
                     {% endif %}
                 </td>
                 <td>{{ value.get("rsi", "—") }}</td>

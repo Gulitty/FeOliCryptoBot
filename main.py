@@ -1,105 +1,97 @@
-import os
 import requests
 import pandas as pd
 import numpy as np
 from flask import Flask, render_template
-import telegram
-
-# Variáveis de ambiente (no Render)
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+import asyncio
+from telegram import Bot
 
 app = Flask(__name__)
 
-# Lista de criptos a monitorar
-CRYPTOS = {
-    "bitcoin": "BTC",
-    "ethereum": "ETH",
-    "solana": "SOL"
+TELEGRAM_TOKEN = 'SUA_TOKEN_AQUI'
+TELEGRAM_CHAT_ID = 'SEU_CHAT_ID_AQUI'
+bot = Bot(token=TELEGRAM_TOKEN)
+
+cryptos = {
+    'bitcoin': 'BTC',
+    'ethereum': 'ETH',
+    'solana': 'SOL'
 }
 
-# Estado anterior para evitar alertas repetidos
-last_signals = {}
+ultimo_alerta = {ticker: '—' for ticker in cryptos.values()}
 
-# Função para obter dados históricos simulados (CoinGecko não oferece históricos longos via API gratuita)
-def get_mock_data():
-    np.random.seed(0)
-    data = np.cumsum(np.random.randn(100)) + 1000
-    return pd.Series(data)
+def fetch_price_history(crypto_id):
+    url = f'https://api.coingecko.com/api/v3/coins/{crypto_id}/market_chart?vs_currency=usd&days=2&interval=hourly'
+    response = requests.get(url)
+    data = response.json()
+    return [price[1] for price in data.get("prices", [])][-26:]
 
-# RSI
-def compute_rsi(prices, period=14):
-    delta = prices.diff()
-    gain = delta.clip(lower=0).rolling(window=period).mean()
-    loss = -delta.clip(upper=0).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+def calcular_rsi(precos, periodo=14):
+    df = pd.Series(precos)
+    delta = df.diff()
+    ganho = delta.where(delta > 0, 0)
+    perda = -delta.where(delta < 0, 0)
+    media_ganho = ganho.rolling(window=periodo).mean()
+    media_perda = perda.rolling(window=periodo).mean()
+    rs = media_ganho / media_perda
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.iloc[-1] if not rsi.empty else 50
 
-# MACD e Signal
-def compute_macd(prices):
-    exp1 = prices.ewm(span=12, adjust=False).mean()
-    exp2 = prices.ewm(span=26, adjust=False).mean()
-    macd = exp1 - exp2
+def calcular_macd(precos):
+    df = pd.Series(precos)
+    ema12 = df.ewm(span=12, adjust=False).mean()
+    ema26 = df.ewm(span=26, adjust=False).mean()
+    macd = ema12 - ema26
     signal = macd.ewm(span=9, adjust=False).mean()
-    return macd, signal
+    return macd.iloc[-1], signal.iloc[-1]
 
-# Obter preço atual da CoinGecko
-def get_current_price(crypto_id):
-    try:
-        response = requests.get(
-            f"https://api.coingecko.com/api/v3/simple/price",
-            params={"ids": crypto_id, "vs_currencies": "usd"},
-            timeout=10
-        )
-        data = response.json()
-        return data[crypto_id]["usd"]
-    except:
-        return None
-
-# Verifica o tipo de sinal
-def check_signal(rsi, macd, signal):
+def analisar_tendencia(rsi, macd, signal):
     if macd > signal and 40 <= rsi <= 60:
-        return "compra"
-    elif macd < signal or rsi >= 70 or rsi <= 30:
-        return "venda"
-    else:
-        return "neutro"
+        return 'compra'
+    elif macd < signal or rsi > 70 or rsi < 30:
+        return 'venda'
+    return 'neutra'
 
-# Enviar alerta apenas se houver mudança
-def send_telegram_alert(crypto, signal_text):
-    global last_signals
-    if last_signals.get(crypto) != signal_text:
-        last_signals[crypto] = signal_text
-        bot = telegram.Bot(token=TELEGRAM_TOKEN)
-        mensagem = f"📣 Sinal para {crypto.upper()}: {signal_text.upper()}"
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=mensagem)
+async def enviar_alerta(nome, tendencia):
+    global ultimo_alerta
+    if tendencia != ultimo_alerta[nome]:
+        emoji = {'compra': '🟢', 'venda': '🔴', 'neutra': '🔶'}[tendencia]
+        texto = f'{emoji} Alerta de {tendencia.upper()} para {nome}'
+        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=texto)
+        ultimo_alerta[nome] = tendencia
 
-@app.route("/")
+@app.route('/')
 def index():
     data = {}
-    for crypto_id, symbol in CRYPTOS.items():
-        prices = get_mock_data()
-        rsi = compute_rsi(prices).iloc[-1]
-        macd, signal = compute_macd(prices)
-        macd_val = macd.iloc[-1]
-        signal_val = signal.iloc[-1]
-        price = get_current_price(crypto_id)
+    for nome, ticker in cryptos.items():
+        try:
+            precos = fetch_price_history(nome)
+            rsi = calcular_rsi(precos)
+            macd, signal = calcular_macd(precos)
+            preco_atual = precos[-1] if precos else 0
+            tendencia = analisar_tendencia(rsi, macd, signal)
 
-        if price is None:
-            continue
+            # Enviar alerta se necessário
+            asyncio.run(enviar_alerta(ticker, tendencia))
 
-        tipo_sinal = check_signal(rsi, macd_val, signal_val)
-        send_telegram_alert(symbol, tipo_sinal)
+            data[ticker] = {
+                'price': preco_atual,
+                'rsi': round(rsi, 2),
+                'macd': round(macd, 4),
+                'signal': round(signal, 4),
+                'tendencia': tendencia,
+                'alerta': ultimo_alerta[ticker]
+            }
+        except Exception:
+            data[ticker] = {
+                'price': 0,
+                'rsi': 0,
+                'macd': 0,
+                'signal': 0,
+                'tendencia': 'neutra',
+                'alerta': '—'
+            }
 
-        data[symbol] = {
-            "price": price,
-            "rsi": rsi,
-            "macd": macd_val,
-            "signal": signal_val,
-            "alert": tipo_sinal
-        }
+    return render_template('index.html', cryptos=data)
 
-    return render_template("index.html", cryptos=data)
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
+if __name__ == '__main__':
+    app.run(debug=True, port=10000)
