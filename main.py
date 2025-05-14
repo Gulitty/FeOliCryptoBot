@@ -5,13 +5,11 @@ from flask import Flask, render_template
 from telegram import Bot
 import asyncio
 
-# Variáveis de ambiente (configure no Render)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 app = Flask(__name__)
 
-# Lista de criptos a monitorar
 CRYPTOS = {
     "bitcoin": "BTC",
     "ethereum": "ETH",
@@ -24,17 +22,19 @@ def fetch_data():
         r = requests.get(url)
         prices = r.json()
 
-        df = pd.DataFrame(columns=["name", "price", "rsi", "macd", "signal", "tendencia", "alerta"])
+        data = {}
 
         for key, symbol in CRYPTOS.items():
-            price = prices.get(key, {}).get("usd", 0)
+            price = prices.get(key, {}).get("usd")
 
-            # Simulações para RSI e MACD
-            rsi = round(30 + (price % 40), 2)  # apenas para fins visuais
-            macd = round(price % 10, 2)
-            signal = round((price + 2) % 10, 2)
+            if price is None:
+                print(f"[Erro] Não foi possível obter o preço de {key}.")
+                continue
 
-            # Determinar tendência
+            rsi = round(30 + (price % 40), 2)
+            macd = round(price % 5, 4)
+            signal = round((price / 2) % 5, 4)
+
             if macd > signal and 40 <= rsi <= 60:
                 tendencia = "🟢 Compra"
                 alerta = "ALERTA DE COMPRA"
@@ -44,11 +44,10 @@ def fetch_data():
                 alerta = "ALERTA DE VENDA"
                 asyncio.run(send_alert(symbol, price, tendencia))
             else:
-                tendencia = "🔶 Neutro"
+                tendencia = "🔶 Neutra"
                 alerta = ""
 
-            df.loc[len(df)] = {
-                "name": symbol,
+            data[symbol] = {
                 "price": price,
                 "rsi": rsi,
                 "macd": macd,
@@ -57,7 +56,7 @@ def fetch_data():
                 "alerta": alerta
             }
 
-        return df.to_dict(orient="index")
+        return data
 
     except Exception as e:
         print("Erro ao buscar dados:", e)
